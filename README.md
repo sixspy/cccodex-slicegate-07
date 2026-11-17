@@ -32,6 +32,30 @@
 - 重切失败整笔回滚 vs 保留已完整分区
 - 放行与水位同步闸 vs 异步放行后纠偏
 
+## 期望变更闭环（当日钉死口径）
+
+策略条、重裁目录、期望详情、放行闸、列表旁注共用同一份切片视图（`slice_view`），口径只此一种写法：
+
+- **甲规则（本日钉死）**：期望行数变更时，在单一事务内整行写入——期望版本 +1、完整度改“待重裁”、放行态回“未放行”、待重裁标记置位、记一条作废基线；旧完整标记随期望版本失效，不得再凭旧完整放行或推水位。放行闸只认 `evaluation_rev == expected_rev` 且重裁结论为“完整”的切片。
+- 变更必须携带读取到的 `expected_rev`；不一致记 **期望争用**，本次不生效（后手不静默成功），且切片字段不半更新。
+- 提交口径 `rule` 或 `statement` 与当日钉死说明不一致，拒绝并记 **期望口径偏了**；`POST /api/policy` 当天换口径同样被拒并落 `policy_events`。
+- 实收变更（`POST /api/slices/{id}/arrival`）同样作废旧结论，必须重裁。
+- 期望升高后仍低于当前期望的旧水位，在重裁目录与期望详情里单列（`watermarks_below_expectation`），只做对照，不作为放行依据。
+
+## 主要接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/slices` | 切片列表（含 `gate`/`note`/`expected_rev`/`evaluation_rev`/`recut_required`）与当日口径 |
+| POST | `/api/slices/{id}/expectation` | 期望变更（`expected_count`、`expected_rev`、可选 `rule`/`statement`/`reason`） |
+| GET | `/api/expectations` | 期望变更流水（已生效 / 期望争用 / 期望口径偏了） |
+| GET | `/api/slices/{id}/expectation` | 期望详情：切片视图、变更流水、重裁轨迹、低于期望的水位 |
+| GET | `/api/recut` | 重裁目录：待重裁切片、重裁写入记录、低于期望的水位 |
+| POST | `/api/slices/{id}/evaluate` | 按当前期望版本重裁并写入结论 |
+| POST | `/api/slices/{id}/arrival` | 更新实收，作废旧结论 |
+| POST | `/api/slices/{id}/release` | 放行闸：待重裁 / 未完整一律拒绝并记拒绝流水，不写水位 |
+| GET/POST | `/api/policy` | 当日期望口径（GET 首读即钉死，POST 换口径被拒并记“期望口径偏了”） |
+
 ## 启动（一键）
 
 `powershell
